@@ -1,6 +1,5 @@
 streamlit 
 langchain 
-langchain-google-genai
 langchain-groq
 google-generativeai
 sqlalchemy 
@@ -9,4 +8,5 @@ psycopg2-binary
 python-dotenv 
 slack-sdk 
 flask
+
 redis

@@ -274,7 +274,7 @@ def format_slack_response(question, sql, results, user_id):
         {"type": "context", "elements": [{"type": "mrkdwn", "text": f"{len(results)} rows"}]}
     ]
     
-    # Add CSV export button (Stretch Goal 1)
+    # Add CSV export button 
     blocks.append({
         "type": "actions",
         "elements": [{
@@ -293,7 +293,7 @@ sql_gen = SQLGenerator()
 def process_question(text, response_url, user_id):
     logger.info(f"Processing: '{text}' for user {user_id}")
     
-    # Check cache first (Stretch Goal 3)
+    # Check cache first 
     cache_key = f"question:{user_id}:{hashlib.md5(text.encode()).hexdigest()}"
     if cache:
         cached_response = cache.get(cache_key)
@@ -317,7 +317,7 @@ def process_question(text, response_url, user_id):
     
     response = format_slack_response(text, sql, results, user_id)
     
-    # Cache the response (Stretch Goal 3)
+    # Cache the response 
     if cache:
         cache.setex(cache_key, 1800, json.dumps(response))  # 30 minutes
     
@@ -353,4 +353,5 @@ def health():
 if __name__ == '__main__':
     print("🚀 Started Slack AI Bot")
     print("✅ Caching - " + ("Connected" if cache else "Disabled"))
+
     app.run(port=3000)

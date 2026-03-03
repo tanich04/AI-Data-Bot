@@ -94,13 +94,6 @@ def get_db_connection(read_only=True):
         return None
 
 def validate_sql(sql):
-    """
-    Validate SQL query before execution
-    - Allow only SELECT statements
-    - Block INSERT, UPDATE, DELETE, DROP, etc.
-    - Reject multiple statements
-    - Check against table/column allowlist
-    """
     sql_upper = sql.upper().strip()
 
     forbidden_commands = ['INSERT', 'UPDATE', 'DELETE', 'DROP', 'ALTER', 
@@ -402,3 +395,4 @@ if __name__ == '__main__':
     print("Started Slack AI Bot with safeguards!")
 
     app.run(port=3000)
+

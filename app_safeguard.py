@@ -25,7 +25,6 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ==================== CONFIGURATION ====================
 # Safeguard 5: Query limits
 MAX_ROWS = 1000
 QUERY_TIMEOUT_SECONDS = 10
@@ -35,8 +34,6 @@ ALLOWED_TABLES = {'sales_daily'}
 ALLOWED_COLUMNS = {
     'sales_daily': {'date', 'region', 'category', 'revenue', 'orders', 'created_at'}
 }
-
-# ==================== CACHING SETUP ====================
 try:
     cache = redis.Redis(
         host=os.getenv('REDIS_HOST', 'localhost'),
@@ -45,16 +42,14 @@ try:
         decode_responses=True
     )
     cache.ping()
-    print("✅ Redis cache connected")
+    print("Redis cache connected")
 except:
     cache = None
-    print("⚠️ Redis not available - caching disabled")
+    print("Redis not available - caching disabled")
 
-# Store last query results for CSV export
 last_results = {}
 last_results_lock = threading.Lock()
 
-# ==================== SLACK VERIFICATION ====================
 def verify_slack_request(request):
     timestamp = request.headers.get('X-Slack-Request-Timestamp')
     signature = request.headers.get('X-Slack-Signature')
@@ -70,16 +65,13 @@ def verify_slack_request(request):
     ).hexdigest()
     return hmac.compare_digest(my_signature, signature)
 
-# ==================== SAFEGUARD 1: READ-ONLY DATABASE USER ====================
 def get_db_connection(read_only=True):
     """Connect to database - read-only by default"""
     try:
         if read_only:
-            # Use read-only user for queries
             user = os.getenv('DB_USER', 'slack_bot_ro')
             password = os.getenv('DB_PASSWORD')
         else:
-            # Use admin user for maintenance
             user = os.getenv('DB_ADMIN_USER', 'postgres')
             password = os.getenv('DB_ADMIN_PASSWORD')
         
@@ -101,7 +93,6 @@ def get_db_connection(read_only=True):
         logger.error(f"DB connection error: {e}")
         return None
 
-# ==================== SAFEGUARD 2 & 3: SQL VALIDATION ====================
 def validate_sql(sql):
     """
     Validate SQL query before execution
@@ -110,42 +101,32 @@ def validate_sql(sql):
     - Reject multiple statements
     - Check against table/column allowlist
     """
-    # Convert to uppercase for checking
     sql_upper = sql.upper().strip()
-    
-    # Safeguard 2: Block any non-SELECT statements
+
     forbidden_commands = ['INSERT', 'UPDATE', 'DELETE', 'DROP', 'ALTER', 
                           'CREATE', 'TRUNCATE', 'GRANT', 'REVOKE']
     
     for cmd in forbidden_commands:
-        # Use regex to match whole words only
         if re.search(rf'\b{cmd}\b', sql_upper):
             return False, f"{cmd} operations are not allowed. Only SELECT queries are permitted."
     
-    # Start with SELECT
     if not sql_upper.startswith('SELECT'):
         return False, "Only SELECT queries are allowed"
-    
-    # Safeguard 2: Reject multiple statements (containing ;)
+
     if sql.count(';') > 1:
         return False, "Multiple SQL statements are not allowed"
-    
-    # Safeguard 3: Table allowlist check
+
     table_pattern = r'\bFROM\s+([a-zA-Z_][a-zA-Z0-9_\.]*)(?:\s|$)'
     tables = re.findall(table_pattern, sql, re.IGNORECASE)
-    
-    # Also check JOIN clauses
+
     join_pattern = r'\bJOIN\s+([a-zA-Z_][a-zA-Z0-9_\.]*)(?:\s|$)'
     tables.extend(re.findall(join_pattern, sql, re.IGNORECASE))
-    
-    # Clean table names
     cleaned_tables = [t.split('.')[-1] for t in tables]
     
     for table in cleaned_tables:
         if table not in ALLOWED_TABLES:
             return False, f"Access to table '{table}' is not allowed. Allowed tables: {', '.join(ALLOWED_TABLES)}"
-    
-    # Safeguard 5: Ensure LIMIT clause exists
+
     if 'LIMIT' not in sql_upper:
         if sql.strip().endswith(';'):
             sql = sql.rstrip(';') + f" LIMIT {MAX_ROWS};"
@@ -158,12 +139,10 @@ def validate_sql(sql):
         if match:
             limit_value = int(match.group(1))
             if limit_value > MAX_ROWS:
-                # Replace with our limit
                 sql = re.sub(limit_pattern, f"LIMIT {MAX_ROWS}", sql, flags=re.IGNORECASE)
     
     return True, sql
 
-# ==================== SQL GENERATOR ====================
 class SQLGenerator:
     def __init__(self):
         api_key = os.getenv("GROQ_API_KEY")
@@ -206,7 +185,7 @@ SQL: SELECT region, SUM(revenue) as total_revenue FROM sales_daily WHERE date = 
         ])
         
         self.chain = self.prompt | self.llm
-        print("✅ Groq SQL ready with safeguards")
+        print("Groq SQL ready with safeguards")
     
     def generate_sql(self, question):
         try:
@@ -224,7 +203,6 @@ SQL: SELECT region, SUM(revenue) as total_revenue FROM sales_daily WHERE date = 
             logger.error(f"Error generating SQL: {e}")
             return "SELECT * FROM sales_daily ORDER BY date DESC LIMIT 5;"
 
-# ==================== SAFEGUARD 4: ROW-LEVEL SECURITY ====================
 def apply_row_level_security(sql, user_id, user_info=None):
     """
     Apply row-level security based on user context
@@ -233,23 +211,17 @@ def apply_row_level_security(sql, user_id, user_info=None):
     - Users can only see data after certain date
     - Department-based restrictions
     """
-    # Example: If user is from specific domain, restrict to region
     if user_info and user_info.get('email', '').endswith('@north.example.com'):
-        # Add region filter if not already present
         if 'WHERE' not in sql.upper():
-            # Add WHERE clause before LIMIT or at the end
             if 'LIMIT' in sql.upper():
                 sql = sql.replace('LIMIT', "WHERE region = 'North' LIMIT")
             else:
                 sql += " WHERE region = 'North'"
         elif 'region' not in sql.upper():
-            # Add region condition to existing WHERE
-            # This is simplified - you'd need proper SQL parsing for production
             sql = sql.replace('WHERE', "WHERE region = 'North' AND")
     
     return sql
 
-# ==================== EXECUTE SQL WITH SAFEGUARDS ====================
 def execute_sql(sql, user_id, user_info=None):
     """
     Execute SQL with all safeguards:
@@ -258,39 +230,30 @@ def execute_sql(sql, user_id, user_info=None):
     - Timeout (Safeguard 5)
     - Caching
     """
-    # Step 1: Validate SQL (Safeguard 2 & 3)
     is_valid, validation_result = validate_sql(sql)
     if not is_valid:
         return {"error": validation_result}
-    
-    # Step 2: Apply RLS (Safeguard 4)
+
     secured_sql = apply_row_level_security(validation_result, user_id, user_info)
-    
-    # Step 3: Generate cache key
+
     cache_key = f"query:{user_id}:{hashlib.md5(secured_sql.encode()).hexdigest()}"
-    
-    # Step 4: Check cache
     if cache:
         cached = cache.get(cache_key)
         if cached:
             logger.info(f"Cache hit for {cache_key}")
             return json.loads(cached)
-    
-    # Step 5: Execute with timeout (Safeguard 5)
+
     conn = get_db_connection()
     if not conn:
         return {"error": "Database connection failed"}
     
     try:
-        # Set statement timeout
         cur = conn.cursor()
         cur.execute(f"SET statement_timeout = '{QUERY_TIMEOUT_SECONDS}s';")
         cur.execute(secured_sql)
         results = cur.fetchall()
         cur.close()
         conn.close()
-        
-        # Store in cache
         if cache and results:
             cache.setex(cache_key, 3600, json.dumps(results, default=str))
         
@@ -300,7 +263,6 @@ def execute_sql(sql, user_id, user_info=None):
     except Exception as e:
         return {"error": str(e)}
 
-# ==================== CSV EXPORT ====================
 @app.route('/export-csv/<user_id>', methods=['GET'])
 def export_csv(user_id):
     """Export last query results as CSV"""
@@ -313,7 +275,7 @@ def export_csv(user_id):
     if isinstance(results, dict) and "error" in results:
         return f"Error: {results['error']}", 400
     
-    # Convert to CSV
+    # Converting to csv
     output = io.StringIO()
     if results:
         writer = csv.DictWriter(output, fieldnames=results[0].keys())
@@ -332,13 +294,10 @@ def export_csv(user_id):
         as_attachment=True
     )
 
-# ==================== FORMAT FOR SLACK ====================
 def format_slack_response(question, sql, results, user_id):
-    # Store results for CSV export
     with last_results_lock:
         last_results[user_id] = results
-    
-    # Error case
+
     if isinstance(results, dict) and "error" in results:
         return {
             "response_type": "in_channel",
@@ -356,8 +315,7 @@ def format_slack_response(question, sql, results, user_id):
                 "text": {"type": "mrkdwn", "text": f"*Question:* {question}\n*Result:* No data found"}
             }]
         }
-    
-    # Format preview
+
     preview = ""
     for i, row in enumerate(results[:5]):
         preview += f"{i+1}. {dict(row)}\n"
@@ -371,8 +329,6 @@ def format_slack_response(question, sql, results, user_id):
         {"type": "section", "text": {"type": "mrkdwn", "text": f"*Results:*\n```{preview}```"}},
         {"type": "context", "elements": [{"type": "mrkdwn", "text": f"📊 {len(results)} rows (max {MAX_ROWS})"}]}
     ]
-    
-    # Add CSV export button
     blocks.append({
         "type": "actions",
         "elements": [{
@@ -385,13 +341,11 @@ def format_slack_response(question, sql, results, user_id):
     
     return {"response_type": "in_channel", "blocks": blocks}
 
-# Initialize
+# Initializing
 sql_gen = SQLGenerator()
 
 def process_question(text, response_url, user_id):
     logger.info(f"Processing: '{text}' for user {user_id}")
-    
-    # Check cache
     cache_key = f"question:{user_id}:{hashlib.md5(text.encode()).hexdigest()}"
     if cache:
         cached_response = cache.get(cache_key)
@@ -399,22 +353,18 @@ def process_question(text, response_url, user_id):
             logger.info("Returning cached response")
             requests.post(response_url, json=json.loads(cached_response))
             return
-    
-    # Generate SQL
+
     sql = sql_gen.generate_sql(text)
-    
-    # Execute with all safeguards
+
     results = execute_sql(sql, user_id)
-    
-    # Format response
+
     response = format_slack_response(text, sql, results, user_id)
-    
-    # Cache response
+
     if cache:
         cache.setex(cache_key, 1800, json.dumps(response))
     
     requests.post(response_url, json=response)
-    logger.info("✅ Response sent to Slack")
+    logger.info("Response sent to Slack")
 
 @app.route('/slack/commands', methods=['POST'])
 def slack_commands():
@@ -450,4 +400,5 @@ def health():
 
 if __name__ == '__main__':
     print("Started Slack AI Bot with safeguards!")
+
     app.run(port=3000)

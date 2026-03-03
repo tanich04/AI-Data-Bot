@@ -5,17 +5,17 @@ A powerful Slack bot that converts natural language questions into SQL queries u
 ## Features
 
 ### Core Functionality
-- 1. **Natural Language to SQL**: Ask questions in plain English
-- 2. **PostgreSQL Integration**: Direct query execution with safeguards
-- 3. **Slack Slash Command**: `/ask-data` for easy access
-- 4. **Formatted Responses**: Clean, readable output in Slack
+-  **Natural Language to SQL**: Ask questions in plain English
+-  **PostgreSQL Integration**: Direct query execution with safeguards
+-  **Slack Slash Command**: `/ask-data` for easy access
+-  **Formatted Responses**: Clean, readable output in Slack
 
 ### Enterprise Safeguards
-- 1. **Read-Only Database User**: Prevents any data modification
-- 2. **SQL Validation**: Blocks all non-SELECT commands
-- 3. **Table Allowlist**: Restricted to `sales_daily` table only
-- 4. **Row-Level Security**: User-specific data filtering
-- 5. **Auto LIMIT + Timeout**: Prevents performance issues
+-  **Read-Only Database User**: Prevents any data modification
+-  **SQL Validation**: Blocks all non-SELECT commands
+-  **Table Allowlist**: Restricted to `sales_daily` table only
+-  **Row-Level Security**: User-specific data filtering
+-  **Auto LIMIT + Timeout**: Prevents performance issues
 
 ### Advanced Features
 -  **CSV Export**: One-click data export
@@ -92,4 +92,5 @@ ngrok http 3000
 
 # Copy the ngrok URL and update .env BASE_URL
 # Also update Slack app with new ngrok URL if it changed
+
 ```

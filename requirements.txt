@@ -1,0 +1,12 @@
+streamlit 
+langchain 
+langchain-google-genai
+langchain-groq
+google-generativeai
+sqlalchemy 
+pymysql 
+psycopg2-binary 
+python-dotenv 
+slack-sdk 
+flask
+redis

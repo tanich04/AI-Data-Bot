@@ -12,10 +12,6 @@ import logging
 import csv
 import io
 import pandas as pd
-import matplotlib
-matplotlib.use('Agg')  # Use non-interactive backend
-import matplotlib.pyplot as plt
-import seaborn as sns
 from datetime import datetime
 import hashlib
 import json
@@ -28,7 +24,7 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ==================== CACHING SETUP ====================
+# Redis Based Caching
 try:
     cache = redis.Redis(
         host=os.getenv('REDIS_HOST', 'localhost'),
@@ -42,11 +38,11 @@ except:
     cache = None
     print("⚠️ Redis not available - caching disabled")
 
-# Store last query results for CSV export 
+# Storing last query results for CSV export 
 last_results = {}
 last_results_lock = threading.Lock()
 
-# ==================== SLACK VERIFICATION ====================
+# Slack Verify
 def verify_slack_request(request):
     timestamp = request.headers.get('X-Slack-Request-Timestamp')
     signature = request.headers.get('X-Slack-Signature')
@@ -62,7 +58,7 @@ def verify_slack_request(request):
     ).hexdigest()
     return hmac.compare_digest(my_signature, signature)
 
-# ==================== DATABASE CONNECTION ====================
+# Connecting to DataBase
 def get_db_connection():
     try:
         return psycopg2.connect(
@@ -77,7 +73,7 @@ def get_db_connection():
         logger.error(f"DB connection error: {e}")
         return None
 
-# ==================== SQL GENERATOR ====================
+# SQL Generation
 class SQLGenerator:
     def __init__(self):
         api_key = os.getenv("GROQ_API_KEY")
@@ -127,19 +123,14 @@ SQL: SELECT region, SUM(revenue) as total_revenue FROM sales_daily WHERE date = 
             logger.error(f"Error: {e}")
             return "SELECT * FROM sales_daily ORDER BY date DESC LIMIT 5;"
 
-# ==================== EXECUTE SQL WITH CACHING ====================
+# Check for retrieval using cache 
 def execute_sql(sql, user_id):
-    # Generate cache key
     cache_key = f"query:{user_id}:{hashlib.md5(sql.encode()).hexdigest()}"
-    
-    # Check cache first
     if cache:
         cached = cache.get(cache_key)
         if cached:
             logger.info(f"Cache hit for {cache_key}")
             return json.loads(cached)
-    
-    # Execute query
     conn = get_db_connection()
     if not conn:
         return {"error": "Database connection failed"}
@@ -200,7 +191,7 @@ def execute_sql(sql, user_id):
     
 #     return None
 
-# ==================== CSV EXPORT ====================
+# Route to Export to CSV file
 @app.route('/export-csv/<user_id>', methods=['GET'])
 def export_csv(user_id):
     """Export last query results as CSV"""
@@ -213,14 +204,13 @@ def export_csv(user_id):
     if isinstance(results, dict) and "error" in results:
         return f"Error: {results['error']}", 400
     
-    # Convert to CSV
+    # Conversion to CSV
     output = io.StringIO()
     if results:
         writer = csv.DictWriter(output, fieldnames=results[0].keys())
         writer.writeheader()
         writer.writerows(results)
     
-    # Create response
     mem = io.BytesIO()
     mem.write(output.getvalue().encode())
     mem.seek(0)
@@ -233,9 +223,8 @@ def export_csv(user_id):
         as_attachment=True
     )
 
-# ==================== FORMAT FOR SLACK ====================
+# Getting proper format for Slack
 def format_slack_response(question, sql, results, user_id):
-    # Store results for CSV export
     with last_results_lock:
         last_results[user_id] = results
     
@@ -257,24 +246,20 @@ def format_slack_response(question, sql, results, user_id):
                 "text": {"type": "mrkdwn", "text": f"*Question:* {question}\n*SQL:* `{sql}`\n*Result:* No data found"}
             }]
         }
-    
-    # Format preview
     preview = ""
     for i, row in enumerate(results[:5]):
         preview += f"{i+1}. {dict(row)}\n"
     
     if len(results) > 5:
         preview += f"... and {len(results)-5} more rows"
-    
-    # Build blocks
+
     blocks = [
         {"type": "section", "text": {"type": "mrkdwn", "text": f"*Question:* {question}"}},
         {"type": "section", "text": {"type": "mrkdwn", "text": f"*SQL:* `{sql}`"}},
         {"type": "section", "text": {"type": "mrkdwn", "text": f"*Results:*\n```{preview}```"}},
         {"type": "context", "elements": [{"type": "mrkdwn", "text": f"{len(results)} rows"}]}
     ]
-    
-    # Add CSV export button 
+
     blocks.append({
         "type": "actions",
         "elements": [{
@@ -287,13 +272,12 @@ def format_slack_response(question, sql, results, user_id):
     
     return {"response_type": "in_channel", "blocks": blocks}
 
-# Initialize
+# Initializing sql generator
 sql_gen = SQLGenerator()
 
 def process_question(text, response_url, user_id):
     logger.info(f"Processing: '{text}' for user {user_id}")
-    
-    # Check cache first 
+  
     cache_key = f"question:{user_id}:{hashlib.md5(text.encode()).hexdigest()}"
     if cache:
         cached_response = cache.get(cache_key)
@@ -302,7 +286,7 @@ def process_question(text, response_url, user_id):
             requests.post(response_url, json=json.loads(cached_response))
             return
     
-    # Generate and execute SQL
+    # Generate and execute
     sql = sql_gen.generate_sql(text)
     results = execute_sql(sql, user_id)
     
@@ -316,13 +300,12 @@ def process_question(text, response_url, user_id):
     #         pass
     
     response = format_slack_response(text, sql, results, user_id)
-    
-    # Cache the response 
+
     if cache:
         cache.setex(cache_key, 1800, json.dumps(response))  # 30 minutes
     
     requests.post(response_url, json=response)
-    logger.info("✅ Response sent to Slack")
+    logger.info("Response sent to Slack")
 
 @app.route('/slack/commands', methods=['POST'])
 def slack_commands():
@@ -351,7 +334,7 @@ def health():
     })
 
 if __name__ == '__main__':
-    print("🚀 Started Slack AI Bot")
-    print("✅ Caching - " + ("Connected" if cache else "Disabled"))
+    print("Started Slack AI Bot")
+    print("Caching - " + ("Connected" if cache else "Disabled"))
 
     app.run(port=3000)
